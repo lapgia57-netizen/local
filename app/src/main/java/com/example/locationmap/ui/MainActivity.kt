@@ -99,7 +99,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupMap() {
         try {
             binding.mapView.apply {
-                // OpenStreetMap standard tiles (HTTPS)
+                // Bản đồ địa hình OpenTopoMap (HTTPS)
                 setTileSource(createOsmTileSource())
 
                 zoomController.setVisibility(CustomZoomButtonsController.Visibility.SHOW_AND_FADEOUT)
@@ -109,7 +109,7 @@ class MainActivity : AppCompatActivity() {
                 isVerticalMapRepetitionEnabled = false
 
                 minZoomLevel = 4.0
-                maxZoomLevel = 19.0
+                maxZoomLevel = 17.0
                 controller.setZoom(14.0)
                 // Default center: Vietnam (Hanoi)
                 controller.setCenter(GeoPoint(21.0285, 105.8542))
@@ -133,19 +133,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Explicit OSM tile source – more reliable than default MAPNIK on some devices.
+     * Bản đồ địa hình OpenTopoMap (dựa trên OSM + dữ liệu địa hình).
+     * Miễn phí, không cần API key.
      */
     private fun createOsmTileSource(): OnlineTileSourceBase {
         return XYTileSource(
-            "OpenStreetMap",
-            0, 19, 256, ".png",
+            "OpenTopoMap",
+            0, 17, 256, ".png",
             arrayOf(
-                "https://tile.openstreetmap.org/",
-                "https://a.tile.openstreetmap.org/",
-                "https://b.tile.openstreetmap.org/",
-                "https://c.tile.openstreetmap.org/"
+                "https://a.tile.opentopomap.org/",
+                "https://b.tile.opentopomap.org/",
+                "https://c.tile.opentopomap.org/"
             ),
-            "© OpenStreetMap contributors"
+            "© OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)"
         )
     }
 
@@ -397,19 +397,30 @@ class MainActivity : AppCompatActivity() {
     private fun saveLocation(name: String, lat: Double, lng: Double) {
         lifecycleScope.launch {
             try {
+                if (repo.currentUser == null) {
+                    safeToast("Phiên đăng nhập hết hạn. Hãy đăng xuất rồi đăng nhập lại.")
+                    return@launch
+                }
                 val item = LocationItem(name = name, latitude = lat, longitude = lng)
                 val result = repo.saveLocation(item)
                 result.onSuccess {
-                    safeToast(getString(R.string.location_saved))
+                    Toast.makeText(
+                        this@MainActivity,
+                        getString(R.string.location_saved),
+                        Toast.LENGTH_SHORT
+                    ).show()
                     if (isMapReady) {
                         binding.mapView.controller.animateTo(GeoPoint(lat, lng))
+                        binding.mapView.controller.setZoom(16.0)
                     }
-                }.onFailure {
-                    safeToast("Lỗi lưu: ${it.message}")
+                }.onFailure { err ->
+                    val msg = err.message ?: "Lỗi không xác định"
+                    Toast.makeText(this@MainActivity, "Lỗi lưu: $msg", Toast.LENGTH_LONG).show()
+                    Log.e(TAG, "save failed: $msg")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "saveLocation failed", e)
-                safeToast("Lỗi: ${e.message}")
+                Toast.makeText(this@MainActivity, "Lỗi: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }

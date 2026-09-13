@@ -63,3 +63,34 @@ APK: `app/build/outputs/apk/debug/app-debug.apk`
 
 ### GitHub Actions
 Push lên repo → tab Actions → tải artifact `app-debug`.
+
+## v2.1 – Bản đồ địa hình + Fix lưu vị trí
+
+- **Bản đồ địa hình**: OpenTopoMap (dựa trên OSM + SRTM)
+- **Lưu vị trí**: ghi bằng HashMap (tránh lỗi serialize), thông báo lỗi rõ (Permission denied / mạng)
+- Đọc dữ liệu an toàn từng field từ Firebase
+
+### Firebase Rules bắt buộc (nếu chưa cập nhật sẽ lỗi Permission denied khi lưu):
+
+```json
+{
+  "rules": {
+    "locations": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "users": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid"
+      },
+      "companies": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    }
+  }
+}
+```
+
+Vào Firebase Console → Realtime Database → Rules → dán rules trên → Publish.

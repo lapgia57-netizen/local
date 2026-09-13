@@ -1,16 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Cho phép HTTPS tiles OpenStreetMap + fallback cleartext nếu cần -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
     <domain-config cleartextTrafficPermitted="true">
+        <!-- OpenStreetMap standard -->
         <domain includeSubdomains="true">tile.openstreetmap.org</domain>
         <domain includeSubdomains="true">a.tile.openstreetmap.org</domain>
         <domain includeSubdomains="true">b.tile.openstreetmap.org</domain>
         <domain includeSubdomains="true">c.tile.openstreetmap.org</domain>
-        <domain includeSubdomains="true">tile.openstreetmap.fr</domain>
+        <!-- OpenTopoMap (bản đồ địa hình) -->
+        <domain includeSubdomains="true">tile.opentopomap.org</domain>
+        <domain includeSubdomains="true">a.tile.opentopomap.org</domain>
+        <domain includeSubdomains="true">b.tile.opentopomap.org</domain>
+        <domain includeSubdomains="true">c.tile.opentopomap.org</domain>
     </domain-config>
 </network-security-config>
