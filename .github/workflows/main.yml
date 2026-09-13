@@ -22,9 +22,6 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew || true
-
       - name: Create local.properties
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
@@ -34,11 +31,20 @@ jobs:
 
       - name: Build Debug APK
         run: |
+          # Kiểm tra nếu thiếu file gradle-wrapper.jar thì tự động tạo lại wrapper bằng Gradle hệ thống
+          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "Gradle wrapper jar missing. Generating standard wrapper..."
+            gradle wrapper
+          fi
+
+          # Tiến hành cấp quyền và chạy build bằng Gradle Wrapper
           if [ -f "./gradlew" ]; then
+            echo "Building with Gradle Wrapper..."
+            chmod +x gradlew
             ./gradlew assembleDebug --stacktrace
           else
-            # Fallback if wrapper not present
-            gradle assembleDebug --stacktrace || true
+            echo "Gradlew not found. Falling back to global Gradle..."
+            gradle assembleDebug --stacktrace
           fi
 
       - name: Upload APK
@@ -46,4 +52,4 @@ jobs:
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: warn
+          if-no-files-found: error
