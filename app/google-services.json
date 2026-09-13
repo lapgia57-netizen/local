@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "334612619008",
+    "project_id": "ptptt-pcpc",
+    "storage_bucket": "ptptt-pcpc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:334612619008:android:REPLACE_WITH_YOUR_ANDROID_APP_ID",
+        "android_client_info": {
+          "package_name": "com.example.locationmap"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCvMzAs3etL30t9-hZa-jVPDTQQorq0ouU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
