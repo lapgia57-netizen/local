@@ -1,52 +1,48 @@
-# Location Map App – Android
+# OSM Location v2.0
 
-Ứng dụng Android lưu trữ & hiển thị vị trí trên bản đồ, đồng bộ Firebase Realtime Database.
+Ứng dụng Android lưu & hiển thị vị trí trên **OpenStreetMap (OSM)** – miễn phí, không cần API key.
 
-## Tính năng
+## Phiên bản 2.0 – Ổn định trên máy thật
 
-- **Đăng nhập / Đăng ký** bằng Email + Password (Firebase Authentication)
-- **Bản đồ miễn phí** OpenStreetMap (osmdroid) – không cần Google Maps API key
-- **Vị trí hiện tại**: hiển thị chấm xanh, nút “Vị trí của tôi”
-- **Thêm vị trí bất kỳ**:
-  - Nhấn giữ (long-press) trên bản đồ
-  - Hoặc bấm nút + rồi chỉnh tọa độ
-- **Lưu vào node mới** `locations` trên Firebase Realtime Database
-- Danh sách vị trí đã lưu, click để di chuyển map, xóa được
-- Giao diện Material Design 3, hỗ trợ đa thiết bị (phone/tablet)
-- Có GitHub Actions để build APK tự động
+### Cải tiến chính
+- Icon app mới (map pin)
+- Bản đồ OSM chính thức (`tile.openstreetmap.org`)
+- Khởi tạo osmdroid trong `Application` class (một lần, ổn định)
+- Cache tile dùng app-private storage (Android 10–14)
+- User-Agent hợp lệ → không bị OSM block
+- Network Security Config đầy đủ
+- Lấy vị trí: FusedLocation + fallback LocationManager (máy OEM / thiếu GMS)
+- Firebase offline persistence
+- Xử lý lỗi bao quanh mọi thao tác quan trọng → hạn chế crash
+- versionCode 2 / versionName 2.0
 
-## Cấu trúc Firebase
+### Tính năng
+- Đăng nhập / Đăng ký email (Firebase Auth)
+- Bản đồ OpenStreetMap
+- Vị trí hiện tại (GPS)
+- Thêm vị trí bất kỳ (long-press hoặc nút +)
+- Lưu vào node `locations` trên Firebase Realtime Database
+- Danh sách + xóa vị trí
+- Giao diện Material 3, đa thiết bị
 
-### Node mới được sử dụng
-```
-locations/
-  {auto-generated-id}/
-    id: string
-    name: string
-    latitude: number
-    longitude: number
-    userId: string
-    userEmail: string
-    timestamp: number
-```
-
-### Cập nhật Security Rules (quan trọng!)
-
-Trong Firebase Console → Realtime Database → Rules, thêm rule cho node `locations`:
-
+### Cài đặt nhanh
+1. Thay `app/google-services.json` bằng file thật từ Firebase Console  
+   (package name: `com.example.locationmap`)
+2. Bật Email/Password trong Firebase Authentication
+3. Cập nhật Rules:
 ```json
 {
   "rules": {
+    "locations": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
     "users": {
-      "$user_id": {
-        ".read": "$user_id === auth.uid",
-        ".write": "$user_id === auth.uid"
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid"
       },
       "companies": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "locations": {
         ".read": "auth != null",
         ".write": "auth != null"
       }
@@ -54,114 +50,16 @@ Trong Firebase Console → Realtime Database → Rules, thêm rule cho node `loc
   }
 }
 ```
-
-(Hoặc chặt hơn: chỉ cho user đọc/ghi location của chính mình)
-
-## Cài đặt & chạy
-
-### 1. Thêm Android app vào Firebase project
-
-1. Vào [Firebase Console](https://console.firebase.google.com/) → project `ptptt-pcpc`
-2. Project settings → Your apps → Add app → Android
-3. Package name: `com.example.locationmap`
-4. Tải file `google-services.json` và **thay thế** file trong thư mục `app/`
-
-### 2. Bật Authentication
-
-Firebase Console → Authentication → Sign-in method → Email/Password → Enable
-
-### 3. Mở project bằng Android Studio
-
-- File → Open → chọn thư mục project
-- Sync Gradle
-- Chạy trên máy thật hoặc emulator (có Google Play Services để lấy vị trí)
-
-### 4. Quyền vị trí
-
-App sẽ xin quyền `ACCESS_FINE_LOCATION` khi mở.
-
-## Build APK trên GitHub
-
-1. Push code lên GitHub repository
-2. Vào tab **Actions** → workflow **Build APK** sẽ chạy
-3. Tải artifact `app-debug` sau khi build xong
-
-Hoặc build local:
-
-```bash
-./gradlew assembleDebug
-# APK nằm tại: app/build/outputs/apk/debug/app-debug.apk
-```
-
-## Lưu ý
-
-- Project sử dụng **osmdroid** (OpenStreetMap) → hoàn toàn miễn phí, không cần API key bản đồ.
-- Firebase config đã được điền sẵn theo thông tin bạn cung cấp.
-- Cần thay `google-services.json` bằng file thật từ Firebase Console (Android app).
-- minSdk = 24, targetSdk = 34.
-
-## Cấu trúc thư mục chính
-
-```
-app/src/main/java/com/example/locationmap/
-├── data/FirebaseRepository.kt   # Auth + Realtime DB
-├── model/LocationItem.kt
-└── ui/
-    ├── LoginActivity.kt
-    ├── MainActivity.kt
-    └── LocationAdapter.kt
-```
-
-Chúc bạn code vui vẻ!
-
-## Sửa lỗi build thường gặp
-
-### 1. Missing dependencies (đã fix)
-Đã thêm:
-- `androidx.coordinatorlayout:coordinatorlayout`
-- `androidx.recyclerview:recyclerview`
-- `androidx.preference:preference-ktx`
-
-### 2. Deprecated PreferenceManager
-Đã đổi sang `androidx.preference.PreferenceManager`
-
-### 3. google-services.json
-**Bắt buộc** thay file `app/google-services.json` bằng file thật tải từ Firebase Console (thêm Android app với package `com.example.locationmap`).
-
-Nếu không thay, build có thể báo lỗi "No matching client found for package name".
-
-### 4. Gradle Wrapper
-Đã thêm đầy đủ `gradlew` + `gradle-wrapper.jar`. Chạy:
-
-```bash
-chmod +x gradlew
-./gradlew assembleDebug
-```
-
-### 5. Lỗi permissions / location trên máy ảo
-Dùng máy thật hoặc emulator có Google Play + bật Location.
-
-### 6. Firebase Rules
-Nhớ cập nhật rules cho node `locations` như hướng dẫn ở trên, nếu không sẽ không lưu được dữ liệu.
-
-## Sửa lỗi Map không tải (Android 12+ / Oscal Tiger 12)
-
-Đã fix các nguyên nhân phổ biến:
-
-1. **Cache path** → dùng `getExternalFilesDir` (không cần quyền storage)
-2. **User-Agent** → set chuỗi hợp lệ, tránh bị OSM block
-3. **Network Security Config** → cho phép tile HTTPS/HTTP
-4. **Hardware acceleration** → bật cho Activity
-5. **Tiles scaled to DPI** → hiển thị rõ trên màn hình cao DPI
-6. **osmdroid 6.1.20** → tương thích tốt hơn Android 12/13/14
-
-### Checklist khi cài trên máy thật:
-- Cấp quyền **Vị trí** (Location) khi app hỏi
-- Bật **GPS / Vị trí** trong cài đặt máy
-- Có **Internet** (Wi-Fi hoặc 4G)
-- Nếu map vẫn xám: xóa data app → mở lại (xóa cache tile cũ)
-
-### Build lại APK
+4. Build:
 ```bash
 ./gradlew clean assembleDebug
 ```
+APK: `app/build/outputs/apk/debug/app-debug.apk`
+
+### Trên máy Oscal Tiger 12 / Android 12+
+- Cấp quyền **Vị trí**
+- Bật GPS + Internet
+- Nếu map xám: Xóa dữ liệu app → mở lại
+
+### GitHub Actions
+Push lên repo → tab Actions → tải artifact `app-debug`.

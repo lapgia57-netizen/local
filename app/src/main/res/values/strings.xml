@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Location Map</string>
+    <string name="app_name">OSM Location</string>
     <string name="login">Đăng nhập</string>
     <string name="register">Đăng ký</string>
     <string name="email">Email</string>

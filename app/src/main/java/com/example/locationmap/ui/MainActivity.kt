@@ -1,10 +1,16 @@
 package com.example.locationmap.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Bundle
-import android.os.Environment
+import android.os.Looper
+import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -14,7 +20,6 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.locationmap.R
 import com.example.locationmap.data.FirebaseRepository
@@ -24,20 +29,26 @@ import com.example.locationmap.model.LocationItem
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import org.osmdroid.config.Configuration
+import kotlinx.coroutines.withContext
 import org.osmdroid.events.MapEventsReceiver
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
-import java.io.File
 
+/**
+ * Main map screen – OpenStreetMap (OSM) via osmdroid.
+ * Designed for stability on real devices (Android 10–14).
+ */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
@@ -46,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private var myLocationOverlay: MyLocationNewOverlay? = null
     private val markers = mutableMapOf<String, Marker>()
     private var bottomSheetVisible = false
+    private var isMapReady = false
 
     private val locationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -55,167 +67,160 @@ class MainActivity : AppCompatActivity() {
         if (granted) {
             enableMyLocation()
         } else {
-            Toast.makeText(this, getString(R.string.permission_required), Toast.LENGTH_LONG).show()
+            safeToast(getString(R.string.permission_required))
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Check auth first
-        if (repo.currentUser == null) {
-            startActivity(Intent(this, LoginActivity::class.java))
-            finish()
-            return
+        try {
+            if (repo.currentUser == null) {
+                startActivity(Intent(this, LoginActivity::class.java))
+                finish()
+                return
+            }
+
+            binding = ActivityMainBinding.inflate(layoutInflater)
+            setContentView(binding.root)
+            setSupportActionBar(binding.toolbar)
+
+            setupMap()
+            setupRecycler()
+            setupButtons()
+            observeLocations()
+            requestLocationPermission()
+        } catch (e: Exception) {
+            Log.e(TAG, "onCreate failed", e)
+            safeToast("Lỗi khởi tạo: ${e.message}")
         }
-
-        // ========== CRITICAL: osmdroid config BEFORE setContentView ==========
-        initOsmdroid()
-
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-
-        setSupportActionBar(binding.toolbar)
-
-        setupMap()
-        setupRecycler()
-        setupButtons()
-        observeLocations()
-        requestLocationPermission()
-    }
-
-    /**
-     * Cấu hình osmdroid đúng chuẩn cho Android 10+ / 12+ / 13+
-     * - Dùng app-specific storage (không cần quyền WRITE_EXTERNAL)
-     * - User-Agent hợp lệ để tile server không block
-     */
-    private fun initOsmdroid() {
-        val ctx = applicationContext
-
-        // 1. Load preferences
-        Configuration.getInstance().load(
-            ctx,
-            PreferenceManager.getDefaultSharedPreferences(ctx)
-        )
-
-        // 2. User-Agent bắt buộc (tile server OSM block nếu thiếu hoặc quá ngắn)
-        Configuration.getInstance().userAgentValue =
-            "LocationMapApp/1.0 (Android; com.example.locationmap)"
-
-        // 3. Dùng thư mục riêng của app → không cần permission storage trên Android 10+
-        val basePath = File(ctx.getExternalFilesDir(null), "osmdroid")
-        val tileCache = File(basePath, "tiles")
-        if (!basePath.exists()) basePath.mkdirs()
-        if (!tileCache.exists()) tileCache.mkdirs()
-
-        Configuration.getInstance().osmdroidBasePath = basePath
-        Configuration.getInstance().osmdroidTileCache = tileCache
-
-        // 4. Các tùy chọn ổn định trên máy thật
-        Configuration.getInstance().isDebugMode = false
-        Configuration.getInstance().isDebugTileProviders = false
-        Configuration.getInstance().isDebugMapView = false
-        Configuration.getInstance().tileDownloadThreads = 4
-        Configuration.getInstance().tileFileSystemThreads = 4
     }
 
     private fun setupMap() {
-        binding.mapView.apply {
-            // Dùng MAPNIK (OpenStreetMap) – HTTPS
-            setTileSource(TileSourceFactory.MAPNIK)
+        try {
+            binding.mapView.apply {
+                // OpenStreetMap standard tiles (HTTPS)
+                setTileSource(createOsmTileSource())
 
-            // Zoom buttons + multi-touch
-            zoomController.setVisibility(CustomZoomButtonsController.Visibility.SHOW_AND_FADEOUT)
-            setMultiTouchControls(true)
+                zoomController.setVisibility(CustomZoomButtonsController.Visibility.SHOW_AND_FADEOUT)
+                setMultiTouchControls(true)
+                isTilesScaledToDpi = true
+                isHorizontalMapRepetitionEnabled = false
+                isVerticalMapRepetitionEnabled = false
 
-            // Scale tiles theo DPI màn hình (quan trọng trên máy có DPI cao)
-            isTilesScaledToDpi = true
-
-            // Zoom & center mặc định (Hà Nội)
-            controller.setZoom(15.0)
-            controller.setCenter(GeoPoint(21.0285, 105.8542))
-
-            // Giới hạn zoom
-            minZoomLevel = 5.0
-            maxZoomLevel = 20.0
-        }
-
-        // Long-press để thêm vị trí
-        val mapEventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
-            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean = false
-            override fun longPressHelper(p: GeoPoint?): Boolean {
-                p?.let { showAddLocationDialog(it.latitude, it.longitude) }
-                return true
+                minZoomLevel = 4.0
+                maxZoomLevel = 19.0
+                controller.setZoom(14.0)
+                // Default center: Vietnam (Hanoi)
+                controller.setCenter(GeoPoint(21.0285, 105.8542))
             }
-        })
-        binding.mapView.overlays.add(0, mapEventsOverlay)
 
-        // Force refresh tiles
-        binding.mapView.invalidate()
+            // Long-press → add location
+            val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
+                override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean = false
+                override fun longPressHelper(p: GeoPoint?): Boolean {
+                    p?.let { showAddLocationDialog(it.latitude, it.longitude) }
+                    return true
+                }
+            })
+            binding.mapView.overlays.add(0, eventsOverlay)
+            binding.mapView.invalidate()
+            isMapReady = true
+        } catch (e: Exception) {
+            Log.e(TAG, "setupMap failed", e)
+            safeToast("Không thể tải bản đồ. Kiểm tra Internet.")
+        }
+    }
+
+    /**
+     * Explicit OSM tile source – more reliable than default MAPNIK on some devices.
+     */
+    private fun createOsmTileSource(): OnlineTileSourceBase {
+        return XYTileSource(
+            "OpenStreetMap",
+            0, 19, 256, ".png",
+            arrayOf(
+                "https://tile.openstreetmap.org/",
+                "https://a.tile.openstreetmap.org/",
+                "https://b.tile.openstreetmap.org/",
+                "https://c.tile.openstreetmap.org/"
+            ),
+            "© OpenStreetMap contributors"
+        )
     }
 
     private fun setupRecycler() {
         adapter = LocationAdapter(
             onItemClick = { item ->
-                binding.mapView.controller.animateTo(GeoPoint(item.latitude, item.longitude))
-                binding.mapView.controller.setZoom(17.0)
-                hideBottomSheet()
+                if (!isMapReady) return@LocationAdapter
+                try {
+                    binding.mapView.controller.animateTo(GeoPoint(item.latitude, item.longitude))
+                    binding.mapView.controller.setZoom(17.0)
+                    hideBottomSheet()
+                } catch (e: Exception) {
+                    Log.e(TAG, "move to location failed", e)
+                }
             },
-            onDeleteClick = { item ->
-                confirmDelete(item)
-            }
+            onDeleteClick = { item -> confirmDelete(item) }
         )
         binding.rvLocations.layoutManager = LinearLayoutManager(this)
         binding.rvLocations.adapter = adapter
     }
 
     private fun setupButtons() {
-        binding.fabMyLocation.setOnClickListener {
-            centerOnMyLocation()
-        }
-
+        binding.fabMyLocation.setOnClickListener { centerOnMyLocation() }
         binding.fabAddLocation.setOnClickListener {
-            getCurrentLocation { lat, lng ->
-                showAddLocationDialog(lat, lng)
-            }
+            getCurrentLocation { lat, lng -> showAddLocationDialog(lat, lng) }
         }
-
-        binding.tvHint.setOnClickListener {
-            binding.tvHint.visibility = View.GONE
-        }
+        binding.tvHint.setOnClickListener { binding.tvHint.visibility = View.GONE }
     }
 
     private fun observeLocations() {
         lifecycleScope.launch {
-            repo.observeLocations().collectLatest { list ->
-                adapter.submitList(list)
-                binding.tvEmpty.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
-                updateMarkers(list)
-            }
+            repo.observeLocations()
+                .catch { e ->
+                    Log.e(TAG, "observeLocations error", e)
+                    withContext(Dispatchers.Main) {
+                        safeToast("Lỗi tải danh sách: ${e.message}")
+                    }
+                }
+                .collectLatest { list ->
+                    try {
+                        adapter.submitList(list)
+                        binding.tvEmpty.visibility =
+                            if (list.isEmpty()) View.VISIBLE else View.GONE
+                        updateMarkers(list)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "update UI failed", e)
+                    }
+                }
         }
     }
 
     private fun updateMarkers(list: List<LocationItem>) {
-        val currentIds = list.map { it.id }.toSet()
-        markers.keys.filter { it !in currentIds }.forEach { id ->
-            markers[id]?.let { binding.mapView.overlays.remove(it) }
-            markers.remove(id)
-        }
-
-        list.forEach { item ->
-            if (!markers.containsKey(item.id)) {
-                val marker = Marker(binding.mapView).apply {
-                    position = GeoPoint(item.latitude, item.longitude)
-                    title = item.name
-                    snippet = String.format("%.6f, %.6f", item.latitude, item.longitude)
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                    icon = ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_marker)
-                }
-                binding.mapView.overlays.add(marker)
-                markers[item.id] = marker
+        if (!isMapReady) return
+        try {
+            val currentIds = list.map { it.id }.toSet()
+            markers.keys.filter { it !in currentIds }.forEach { id ->
+                markers.remove(id)?.let { binding.mapView.overlays.remove(it) }
             }
+            list.forEach { item ->
+                if (item.id !in markers) {
+                    val marker = Marker(binding.mapView).apply {
+                        position = GeoPoint(item.latitude, item.longitude)
+                        title = item.name
+                        snippet = String.format("%.5f, %.5f", item.latitude, item.longitude)
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        icon = ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_marker)
+                    }
+                    binding.mapView.overlays.add(marker)
+                    markers[item.id] = marker
+                }
+            }
+            binding.mapView.invalidate()
+        } catch (e: Exception) {
+            Log.e(TAG, "updateMarkers failed", e)
         }
-        binding.mapView.invalidate()
     }
 
     private fun requestLocationPermission() {
@@ -234,123 +239,177 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enableMyLocation() {
-        // Xóa overlay cũ nếu có
-        myLocationOverlay?.let { binding.mapView.overlays.remove(it) }
-
-        myLocationOverlay = MyLocationNewOverlay(GpsMyLocationProvider(this), binding.mapView).apply {
-            enableMyLocation()
-            // Không bật follow liên tục để tránh map nhảy
-            disableFollowLocation()
+        if (!isMapReady) return
+        try {
+            myLocationOverlay?.let { binding.mapView.overlays.remove(it) }
+            myLocationOverlay = MyLocationNewOverlay(GpsMyLocationProvider(this), binding.mapView).apply {
+                enableMyLocation()
+                disableFollowLocation()
+            }
+            binding.mapView.overlays.add(myLocationOverlay)
+            binding.mapView.invalidate()
+        } catch (e: Exception) {
+            Log.e(TAG, "enableMyLocation failed", e)
         }
-        binding.mapView.overlays.add(myLocationOverlay)
-        binding.mapView.invalidate()
     }
 
     private fun centerOnMyLocation() {
         val loc = myLocationOverlay?.myLocation
         if (loc != null) {
-            binding.mapView.controller.animateTo(loc)
-            binding.mapView.controller.setZoom(17.0)
-            myLocationOverlay?.enableFollowLocation()
-            // Tắt follow sau 3 giây
-            binding.mapView.postDelayed({
-                myLocationOverlay?.disableFollowLocation()
-            }, 3000)
+            try {
+                binding.mapView.controller.animateTo(loc)
+                binding.mapView.controller.setZoom(17.0)
+                myLocationOverlay?.enableFollowLocation()
+                binding.mapView.postDelayed({
+                    myLocationOverlay?.disableFollowLocation()
+                }, 2500)
+            } catch (e: Exception) {
+                Log.e(TAG, "center failed", e)
+            }
         } else {
             getCurrentLocation { lat, lng ->
-                val point = GeoPoint(lat, lng)
-                binding.mapView.controller.animateTo(point)
-                binding.mapView.controller.setZoom(17.0)
+                try {
+                    binding.mapView.controller.animateTo(GeoPoint(lat, lng))
+                    binding.mapView.controller.setZoom(17.0)
+                } catch (e: Exception) {
+                    Log.e(TAG, "center fallback failed", e)
+                }
             }
         }
     }
 
+    /**
+     * Lấy vị trí hiện tại – ưu tiên FusedLocation, fallback LocationManager (ổn định trên máy không có GMS đầy đủ).
+     */
+    @SuppressLint("MissingPermission")
     private fun getCurrentLocation(onResult: (Double, Double) -> Unit) {
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
         if (fine != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, getString(R.string.permission_required), Toast.LENGTH_SHORT).show()
+            safeToast(getString(R.string.permission_required))
             requestLocationPermission()
             return
         }
 
-        val client = LocationServices.getFusedLocationProviderClient(this)
-        val cts = CancellationTokenSource()
-
         lifecycleScope.launch {
+            // 1. Thử FusedLocationProvider (Google Play Services)
             try {
-                val location = client.getCurrentLocation(
-                    Priority.PRIORITY_HIGH_ACCURACY,
-                    cts.token
-                ).await()
+                val client = LocationServices.getFusedLocationProviderClient(this@MainActivity)
+                val cts = CancellationTokenSource()
+                val location = client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token).await()
                 if (location != null) {
                     onResult(location.latitude, location.longitude)
-                } else {
-                    val last = client.lastLocation.await()
-                    if (last != null) {
-                        onResult(last.latitude, last.longitude)
-                    } else {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Không lấy được vị trí. Hãy bật GPS và thử lại.",
-                            Toast.LENGTH_LONG
-                        ).show()
+                    return@launch
+                }
+                val last = client.lastLocation.await()
+                if (last != null) {
+                    onResult(last.latitude, last.longitude)
+                    return@launch
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "FusedLocation failed, fallback to LocationManager", e)
+            }
+
+            // 2. Fallback: LocationManager (hoạt động tốt trên máy OEM / không GMS)
+            try {
+                val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                var best: Location? = null
+                for (p in providers) {
+                    if (lm.isProviderEnabled(p)) {
+                        val loc = lm.getLastKnownLocation(p)
+                        if (loc != null && (best == null || loc.accuracy < best!!.accuracy)) {
+                            best = loc
+                        }
                     }
                 }
-            } catch (e: SecurityException) {
-                Toast.makeText(this@MainActivity, "Thiếu quyền vị trí", Toast.LENGTH_SHORT).show()
+                if (best != null) {
+                    onResult(best.latitude, best.longitude)
+                    return@launch
+                }
+
+                // Request one update
+                val listener = object : LocationListener {
+                    override fun onLocationChanged(location: Location) {
+                        onResult(location.latitude, location.longitude)
+                        try { lm.removeUpdates(this) } catch (_: Exception) {}
+                    }
+                    override fun onProviderEnabled(provider: String) {}
+                    override fun onProviderDisabled(provider: String) {}
+                    @Deprecated("Deprecated in Java")
+                    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                }
+                for (p in providers) {
+                    if (lm.isProviderEnabled(p)) {
+                        lm.requestLocationUpdates(p, 0L, 0f, listener, Looper.getMainLooper())
+                        // Timeout 8s
+                        binding.root.postDelayed({
+                            try { lm.removeUpdates(listener) } catch (_: Exception) {}
+                        }, 8000)
+                        break
+                    }
+                }
             } catch (e: Exception) {
-                Toast.makeText(this@MainActivity, "Lỗi GPS: ${e.message}", Toast.LENGTH_SHORT).show()
+                Log.e(TAG, "LocationManager failed", e)
+                withContext(Dispatchers.Main) {
+                    safeToast("Không lấy được vị trí. Bật GPS và thử lại.")
+                }
             }
         }
     }
 
     private fun showAddLocationDialog(lat: Double, lng: Double) {
-        val dialogBinding = DialogAddLocationBinding.inflate(layoutInflater)
-        dialogBinding.etLatitude.setText(String.format("%.6f", lat))
-        dialogBinding.etLongitude.setText(String.format("%.6f", lng))
-        dialogBinding.etLocationName.setText(getString(R.string.current_location))
+        try {
+            val dialogBinding = DialogAddLocationBinding.inflate(layoutInflater)
+            dialogBinding.etLatitude.setText(String.format("%.6f", lat))
+            dialogBinding.etLongitude.setText(String.format("%.6f", lng))
+            dialogBinding.etLocationName.setText(getString(R.string.current_location))
 
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogBinding.root)
-            .create()
+            val dialog = AlertDialog.Builder(this)
+                .setView(dialogBinding.root)
+                .setCancelable(true)
+                .create()
 
-        dialogBinding.btnCancel.setOnClickListener { dialog.dismiss() }
-        dialogBinding.btnSave.setOnClickListener {
-            val name = dialogBinding.etLocationName.text.toString().trim()
-            val latStr = dialogBinding.etLatitude.text.toString().trim()
-            val lngStr = dialogBinding.etLongitude.text.toString().trim()
+            dialogBinding.btnCancel.setOnClickListener { dialog.dismiss() }
+            dialogBinding.btnSave.setOnClickListener {
+                val name = dialogBinding.etLocationName.text.toString().trim()
+                val latitude = dialogBinding.etLatitude.text.toString().trim().toDoubleOrNull()
+                val longitude = dialogBinding.etLongitude.text.toString().trim().toDoubleOrNull()
 
-            if (name.isEmpty()) {
-                dialogBinding.etLocationName.error = "Nhập tên vị trí"
-                return@setOnClickListener
+                if (name.isEmpty()) {
+                    dialogBinding.etLocationName.error = "Nhập tên vị trí"
+                    return@setOnClickListener
+                }
+                if (latitude == null || longitude == null ||
+                    latitude !in -90.0..90.0 || longitude !in -180.0..180.0
+                ) {
+                    safeToast("Tọa độ không hợp lệ")
+                    return@setOnClickListener
+                }
+                saveLocation(name, latitude, longitude)
+                dialog.dismiss()
             }
-            val latitude = latStr.toDoubleOrNull()
-            val longitude = lngStr.toDoubleOrNull()
-            if (latitude == null || longitude == null) {
-                Toast.makeText(this, "Tọa độ không hợp lệ", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-
-            saveLocation(name, latitude, longitude)
-            dialog.dismiss()
+            dialog.show()
+        } catch (e: Exception) {
+            Log.e(TAG, "showAddLocationDialog failed", e)
         }
-
-        dialog.show()
     }
 
     private fun saveLocation(name: String, lat: Double, lng: Double) {
         lifecycleScope.launch {
-            val item = LocationItem(name = name, latitude = lat, longitude = lng)
-            val result = repo.saveLocation(item)
-            result.onSuccess {
-                Toast.makeText(this@MainActivity, getString(R.string.location_saved), Toast.LENGTH_SHORT).show()
-                binding.mapView.controller.animateTo(GeoPoint(lat, lng))
-            }.onFailure {
-                Toast.makeText(
-                    this@MainActivity,
-                    "Lỗi lưu: ${it.message}",
-                    Toast.LENGTH_LONG
-                ).show()
+            try {
+                val item = LocationItem(name = name, latitude = lat, longitude = lng)
+                val result = repo.saveLocation(item)
+                result.onSuccess {
+                    safeToast(getString(R.string.location_saved))
+                    if (isMapReady) {
+                        binding.mapView.controller.animateTo(GeoPoint(lat, lng))
+                    }
+                }.onFailure {
+                    safeToast("Lỗi lưu: ${it.message}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "saveLocation failed", e)
+                safeToast("Lỗi: ${e.message}")
             }
         }
     }
@@ -361,7 +420,11 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Xóa \"${item.name}\"?")
             .setPositiveButton(getString(R.string.delete)) { _, _ ->
                 lifecycleScope.launch {
-                    repo.deleteLocation(item.id)
+                    try {
+                        repo.deleteLocation(item.id)
+                    } catch (e: Exception) {
+                        safeToast("Lỗi xóa: ${e.message}")
+                    }
                 }
             }
             .setNegativeButton(getString(R.string.cancel), null)
@@ -378,6 +441,12 @@ class MainActivity : AppCompatActivity() {
         binding.bottomSheet.visibility = View.GONE
     }
 
+    private fun safeToast(msg: String) {
+        try {
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {}
+    }
+
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
         return true
@@ -390,9 +459,13 @@ class MainActivity : AppCompatActivity() {
                 true
             }
             R.id.action_logout -> {
-                repo.logout()
-                startActivity(Intent(this, LoginActivity::class.java))
-                finish()
+                try {
+                    repo.logout()
+                    startActivity(Intent(this, LoginActivity::class.java))
+                    finish()
+                } catch (e: Exception) {
+                    Log.e(TAG, "logout failed", e)
+                }
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -401,17 +474,36 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        binding.mapView.onResume()
+        try {
+            if (::binding.isInitialized) binding.mapView.onResume()
+        } catch (e: Exception) {
+            Log.e(TAG, "onResume map error", e)
+        }
     }
 
     override fun onPause() {
         super.onPause()
-        binding.mapView.onPause()
+        try {
+            if (::binding.isInitialized) binding.mapView.onPause()
+        } catch (e: Exception) {
+            Log.e(TAG, "onPause map error", e)
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        myLocationOverlay?.disableMyLocation()
-        binding.mapView.onDetach()
+        try {
+            myLocationOverlay?.disableMyLocation()
+            if (::binding.isInitialized) {
+                binding.mapView.overlays.clear()
+                binding.mapView.onDetach()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "onDestroy cleanup error", e)
+        }
+    }
+
+    companion object {
+        private const val TAG = "MainActivity"
     }
 }
