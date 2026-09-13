@@ -11,8 +11,10 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
 
 /**
- * Firebase Auth + Realtime Database.
- * Node mới: locations
+ * Lưu vị trí dưới: users/{uid}/locations/{id}
+ * → khớp với Firebase Rules gốc của bạn:
+ *   users/$user_id: .read/.write = $user_id === auth.uid
+ * Không cần sửa Rules vẫn lưu được.
  */
 class FirebaseRepository {
 
@@ -23,15 +25,18 @@ class FirebaseRepository {
         try {
             db.setPersistenceEnabled(true)
         } catch (_: Exception) {
-            // already enabled
+            // already enabled in this process
         }
         db
     }
 
-    private val locationsRef: DatabaseReference
-        get() = database.getReference("locations")
-
     val currentUser get() = auth.currentUser
+
+    /** users/{uid}/locations */
+    private fun userLocationsRef(): DatabaseReference? {
+        val uid = auth.currentUser?.uid ?: return null
+        return database.getReference("users").child(uid).child("locations")
+    }
 
     suspend fun login(email: String, password: String): Result<Unit> {
         return try {
@@ -41,7 +46,7 @@ class FirebaseRepository {
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "login failed", e)
-            Result.failure(e)
+            Result.failure(Exception(friendlyAuthError(e)))
         }
     }
 
@@ -53,7 +58,7 @@ class FirebaseRepository {
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "register failed", e)
-            Result.failure(e)
+            Result.failure(Exception(friendlyAuthError(e)))
         }
     }
 
@@ -66,123 +71,171 @@ class FirebaseRepository {
     }
 
     /**
-     * Lưu vị trí vào node locations/{id}
-     * Dùng HashMap để tránh lỗi serialize data class trên một số máy.
+     * Lưu tọa độ vào users/{uid}/locations/{pushId}
      */
     suspend fun saveLocation(item: LocationItem): Result<String> {
         return try {
-            val user = currentUser
-                ?: return Result.failure(Exception("Chưa đăng nhập. Hãy đăng xuất rồi đăng nhập lại."))
+            val user = auth.currentUser
+                ?: return Result.failure(Exception("Chưa đăng nhập. Đăng xuất rồi đăng nhập lại."))
 
-            val key = locationsRef.push().key
-                ?: return Result.failure(Exception("Không tạo được key Firebase"))
+            val ref = userLocationsRef()
+                ?: return Result.failure(Exception("Không lấy được đường dẫn lưu."))
 
-            val data = hashMapOf<String, Any>(
-                "id" to key,
-                "name" to item.name,
-                "latitude" to item.latitude,
-                "longitude" to item.longitude,
-                "userId" to user.uid,
-                "userEmail" to (user.email ?: ""),
-                "timestamp" to System.currentTimeMillis()
-            )
+            val key = ref.push().key
+                ?: return Result.failure(Exception("Không tạo được ID."))
+
+            // Chỉ dùng HashMap + kiểu primitive rõ ràng (tránh lỗi serialize)
+            val lat = item.latitude
+            val lng = item.longitude
+            if (lat !in -90.0..90.0 || lng !in -180.0..180.0) {
+                return Result.failure(Exception("Tọa độ không hợp lệ: $lat, $lng"))
+            }
+
+            val data = HashMap<String, Any>()
+            data["id"] = key
+            data["name"] = item.name.ifBlank { "Vị trí" }
+            data["latitude"] = lat
+            data["longitude"] = lng
+            data["userId"] = user.uid
+            data["userEmail"] = user.email ?: ""
+            data["timestamp"] = System.currentTimeMillis()
 
             withTimeout(15_000) {
-                locationsRef.child(key).setValue(data).await()
+                ref.child(key).setValue(data).await()
             }
-            Log.i(TAG, "Saved location $key: ${item.name} (${item.latitude}, ${item.longitude})")
+
+            Log.i(TAG, "OK saved $key @ $lat,$lng under users/${user.uid}/locations")
             Result.success(key)
         } catch (e: Exception) {
             Log.e(TAG, "saveLocation failed", e)
-            val msg = when {
-                e.message?.contains("Permission denied", true) == true ->
-                    "Permission denied – kiểm tra Firebase Rules cho node locations"
-                e.message?.contains("network", true) == true ->
-                    "Không có mạng. Kiểm tra Internet."
-                else -> e.message ?: "Lỗi không xác định"
-            }
-            Result.failure(Exception(msg))
+            Result.failure(Exception(friendlyDbError(e)))
         }
     }
 
     suspend fun deleteLocation(id: String): Result<Unit> {
         return try {
             if (id.isBlank()) return Result.failure(Exception("ID rỗng"))
+            val ref = userLocationsRef()
+                ?: return Result.failure(Exception("Chưa đăng nhập"))
             withTimeout(10_000) {
-                locationsRef.child(id).removeValue().await()
+                ref.child(id).removeValue().await()
             }
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "deleteLocation failed", e)
-            val msg = if (e.message?.contains("Permission denied", true) == true)
-                "Permission denied – kiểm tra Firebase Rules"
-            else e.message ?: "Lỗi xóa"
-            Result.failure(Exception(msg))
+            Result.failure(Exception(friendlyDbError(e)))
         }
     }
 
+    /** Lắng nghe users/{uid}/locations */
     fun observeLocations(): Flow<List<LocationItem>> = callbackFlow {
+        val uid = auth.currentUser?.uid
+        if (uid == null) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+
+        val ref = database.getReference("users").child(uid).child("locations")
+
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 try {
-                    val list = mutableListOf<LocationItem>()
+                    val list = ArrayList<LocationItem>()
                     for (child in snapshot.children) {
-                        try {
-                            // Đọc an toàn từng field
-                            val id = child.child("id").getValue(String::class.java)
-                                ?: child.key ?: continue
-                            val name = child.child("name").getValue(String::class.java) ?: ""
-                            val lat = child.child("latitude").getValue(Double::class.java)
-                                ?: child.child("latitude").getValue(Long::class.java)?.toDouble()
-                                ?: 0.0
-                            val lng = child.child("longitude").getValue(Double::class.java)
-                                ?: child.child("longitude").getValue(Long::class.java)?.toDouble()
-                                ?: 0.0
-                            val userId = child.child("userId").getValue(String::class.java) ?: ""
-                            val userEmail = child.child("userEmail").getValue(String::class.java) ?: ""
-                            val ts = child.child("timestamp").getValue(Long::class.java) ?: 0L
-
-                            if (name.isNotBlank() && (lat != 0.0 || lng != 0.0)) {
-                                list.add(
-                                    LocationItem(
-                                        id = id,
-                                        name = name,
-                                        latitude = lat,
-                                        longitude = lng,
-                                        userId = userId,
-                                        userEmail = userEmail,
-                                        timestamp = ts
-                                    )
-                                )
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "skip bad node ${child.key}", e)
-                        }
+                        val parsed = parseLocation(child) ?: continue
+                        list.add(parsed)
                     }
                     list.sortByDescending { it.timestamp }
                     trySend(list)
                 } catch (e: Exception) {
-                    Log.e(TAG, "onDataChange error", e)
+                    Log.e(TAG, "parse list error", e)
                     trySend(emptyList())
                 }
             }
 
             override fun onCancelled(error: DatabaseError) {
-                Log.e(TAG, "observe cancelled: ${error.message} code=${error.code}")
+                Log.e(TAG, "observe cancelled: ${error.message}")
                 trySend(emptyList())
             }
         }
+
         try {
-            locationsRef.keepSynced(true)
-            locationsRef.addValueEventListener(listener)
+            ref.keepSynced(true)
+            ref.addValueEventListener(listener)
         } catch (e: Exception) {
-            Log.e(TAG, "addValueEventListener failed", e)
+            Log.e(TAG, "addListener failed", e)
             trySend(emptyList())
         }
+
         awaitClose {
             try {
-                locationsRef.removeEventListener(listener)
-            } catch (_: Exception) {}
+                ref.removeEventListener(listener)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun parseLocation(child: DataSnapshot): LocationItem? {
+        return try {
+            val id = child.child("id").getValue(String::class.java) ?: child.key ?: return null
+            val name = child.child("name").getValue(String::class.java) ?: "Vị trí"
+
+            // latitude / longitude có thể là Double hoặc Long tùy máy
+            val lat = readDouble(child.child("latitude")) ?: return null
+            val lng = readDouble(child.child("longitude")) ?: return null
+            if (lat == 0.0 && lng == 0.0) return null
+
+            val userId = child.child("userId").getValue(String::class.java) ?: ""
+            val userEmail = child.child("userEmail").getValue(String::class.java) ?: ""
+            val ts = child.child("timestamp").getValue(Long::class.java)
+                ?: child.child("timestamp").getValue(Double::class.java)?.toLong()
+                ?: 0L
+
+            LocationItem(
+                id = id,
+                name = name,
+                latitude = lat,
+                longitude = lng,
+                userId = userId,
+                userEmail = userEmail,
+                timestamp = ts
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "skip node ${child.key}", e)
+            null
+        }
+    }
+
+    private fun readDouble(snap: DataSnapshot): Double? {
+        snap.getValue(Double::class.java)?.let { return it }
+        snap.getValue(Long::class.java)?.let { return it.toDouble() }
+        snap.getValue(String::class.java)?.toDoubleOrNull()?.let { return it }
+        return null
+    }
+
+    private fun friendlyAuthError(e: Exception): String {
+        val m = e.message ?: return "Lỗi đăng nhập"
+        return when {
+            m.contains("password", true) -> "Sai mật khẩu"
+            m.contains("no user", true) || m.contains("USER_NOT_FOUND", true) -> "Email chưa đăng ký"
+            m.contains("already", true) -> "Email đã được sử dụng"
+            m.contains("network", true) -> "Không có mạng"
+            m.contains("INVALID_EMAIL", true) -> "Email không hợp lệ"
+            else -> m
+        }
+    }
+
+    private fun friendlyDbError(e: Exception): String {
+        val m = e.message ?: return "Lỗi cơ sở dữ liệu"
+        return when {
+            m.contains("Permission denied", true) || m.contains("PERMISSION_DENIED", true) ->
+                "Không có quyền ghi. Kiểm tra đã đăng nhập và Firebase Rules (users/\$uid)."
+            m.contains("network", true) || m.contains("Unable to resolve", true) ->
+                "Không có mạng. Kiểm tra Internet."
+            m.contains("timeout", true) || m.contains("timed out", true) ->
+                "Hết thời gian chờ. Thử lại."
+            else -> m
         }
     }
 

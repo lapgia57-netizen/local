@@ -94,3 +94,29 @@ Push lên repo → tab Actions → tải artifact `app-debug`.
 ```
 
 Vào Firebase Console → Realtime Database → Rules → dán rules trên → Publish.
+
+## v2.2 – Fix lưu tọa độ + bản đồ OSM chuẩn
+
+### Thay đổi
+- **Bỏ** bản đồ địa hình OpenTopoMap → dùng **OpenStreetMap** chuẩn
+- **Lưu vị trí** vào `users/{uid}/locations/{id}`  
+  → khớp Rules gốc của bạn (`$user_id === auth.uid`) → **không cần sửa Rules** vẫn lưu được
+- Chuẩn hóa tọa độ bằng `Locale.US` (tránh dấu phẩy trên máy Việt Nam)
+- Ghi Firebase bằng HashMap (latitude/longitude kiểu số rõ ràng)
+- Thông báo lỗi tiếng Việt rõ ràng hơn
+
+### Cấu trúc dữ liệu
+```
+users/
+  {your-uid}/
+    locations/
+      {auto-id}/
+        id, name, latitude, longitude,
+        userId, userEmail, timestamp
+```
+
+### Cách thử lưu vị trí
+1. Đăng nhập
+2. Nhấn giữ (long-press) trên bản đồ **hoặc** bấm nút +
+3. Nhập tên → Lưu
+4. Marker xuất hiện trên map; danh sách ở menu (icon list)

@@ -6,15 +6,9 @@
         </trust-anchors>
     </base-config>
     <domain-config cleartextTrafficPermitted="true">
-        <!-- OpenStreetMap standard -->
         <domain includeSubdomains="true">tile.openstreetmap.org</domain>
         <domain includeSubdomains="true">a.tile.openstreetmap.org</domain>
         <domain includeSubdomains="true">b.tile.openstreetmap.org</domain>
         <domain includeSubdomains="true">c.tile.openstreetmap.org</domain>
-        <!-- OpenTopoMap (bản đồ địa hình) -->
-        <domain includeSubdomains="true">tile.opentopomap.org</domain>
-        <domain includeSubdomains="true">a.tile.opentopomap.org</domain>
-        <domain includeSubdomains="true">b.tile.opentopomap.org</domain>
-        <domain includeSubdomains="true">c.tile.opentopomap.org</domain>
     </domain-config>
 </network-security-config>

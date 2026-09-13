@@ -99,7 +99,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupMap() {
         try {
             binding.mapView.apply {
-                // Bản đồ địa hình OpenTopoMap (HTTPS)
+                // OpenStreetMap chuẩn (HTTPS)
                 setTileSource(createOsmTileSource())
 
                 zoomController.setVisibility(CustomZoomButtonsController.Visibility.SHOW_AND_FADEOUT)
@@ -109,7 +109,7 @@ class MainActivity : AppCompatActivity() {
                 isVerticalMapRepetitionEnabled = false
 
                 minZoomLevel = 4.0
-                maxZoomLevel = 17.0
+                maxZoomLevel = 19.0
                 controller.setZoom(14.0)
                 // Default center: Vietnam (Hanoi)
                 controller.setCenter(GeoPoint(21.0285, 105.8542))
@@ -133,19 +133,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Bản đồ địa hình OpenTopoMap (dựa trên OSM + dữ liệu địa hình).
-     * Miễn phí, không cần API key.
+     * Bản đồ OpenStreetMap chuẩn (không dùng địa hình).
      */
     private fun createOsmTileSource(): OnlineTileSourceBase {
         return XYTileSource(
-            "OpenTopoMap",
-            0, 17, 256, ".png",
+            "MAPNIK",
+            0, 19, 256, ".png",
             arrayOf(
-                "https://a.tile.opentopomap.org/",
-                "https://b.tile.opentopomap.org/",
-                "https://c.tile.opentopomap.org/"
+                "https://tile.openstreetmap.org/",
+                "https://a.tile.openstreetmap.org/",
+                "https://b.tile.openstreetmap.org/",
+                "https://c.tile.openstreetmap.org/"
             ),
-            "© OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)"
+            "© OpenStreetMap contributors"
         )
     }
 
@@ -360,8 +360,8 @@ class MainActivity : AppCompatActivity() {
     private fun showAddLocationDialog(lat: Double, lng: Double) {
         try {
             val dialogBinding = DialogAddLocationBinding.inflate(layoutInflater)
-            dialogBinding.etLatitude.setText(String.format("%.6f", lat))
-            dialogBinding.etLongitude.setText(String.format("%.6f", lng))
+            dialogBinding.etLatitude.setText(String.format(java.util.Locale.US, "%.6f", lat))
+            dialogBinding.etLongitude.setText(String.format(java.util.Locale.US, "%.6f", lng))
             dialogBinding.etLocationName.setText(getString(R.string.current_location))
 
             val dialog = AlertDialog.Builder(this)
@@ -395,31 +395,52 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveLocation(name: String, lat: Double, lng: Double) {
+        // Chuẩn hóa tọa độ (tránh lỗi format số)
+        val safeLat = String.format(java.util.Locale.US, "%.7f", lat).toDouble()
+        val safeLng = String.format(java.util.Locale.US, "%.7f", lng).toDouble()
+
+        if (safeLat !in -90.0..90.0 || safeLng !in -180.0..180.0) {
+            safeToast("Tọa độ không hợp lệ")
+            return
+        }
+
         lifecycleScope.launch {
             try {
                 if (repo.currentUser == null) {
-                    safeToast("Phiên đăng nhập hết hạn. Hãy đăng xuất rồi đăng nhập lại.")
-                    return@launch
-                }
-                val item = LocationItem(name = name, latitude = lat, longitude = lng)
-                val result = repo.saveLocation(item)
-                result.onSuccess {
                     Toast.makeText(
                         this@MainActivity,
-                        getString(R.string.location_saved),
+                        "Phiên đăng nhập hết hạn. Đăng xuất rồi đăng nhập lại.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@launch
+                }
+
+                val item = LocationItem(
+                    name = name.ifBlank { "Vị trí" },
+                    latitude = safeLat,
+                    longitude = safeLng
+                )
+
+                val result = repo.saveLocation(item)
+                result.onSuccess { id ->
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Đã lưu: $name ($safeLat, $safeLng)",
                         Toast.LENGTH_SHORT
                     ).show()
+                    Log.i(TAG, "Saved id=$id")
                     if (isMapReady) {
-                        binding.mapView.controller.animateTo(GeoPoint(lat, lng))
+                        // Marker sẽ tự hiện qua observeLocations; vẫn focus map
+                        binding.mapView.controller.animateTo(GeoPoint(safeLat, safeLng))
                         binding.mapView.controller.setZoom(16.0)
                     }
                 }.onFailure { err ->
                     val msg = err.message ?: "Lỗi không xác định"
                     Toast.makeText(this@MainActivity, "Lỗi lưu: $msg", Toast.LENGTH_LONG).show()
-                    Log.e(TAG, "save failed: $msg")
+                    Log.e(TAG, "save failed: $msg", err)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "saveLocation failed", e)
+                Log.e(TAG, "saveLocation exception", e)
                 Toast.makeText(this@MainActivity, "Lỗi: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
