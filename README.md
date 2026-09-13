@@ -143,3 +143,25 @@ Dùng máy thật hoặc emulator có Google Play + bật Location.
 
 ### 6. Firebase Rules
 Nhớ cập nhật rules cho node `locations` như hướng dẫn ở trên, nếu không sẽ không lưu được dữ liệu.
+
+## Sửa lỗi Map không tải (Android 12+ / Oscal Tiger 12)
+
+Đã fix các nguyên nhân phổ biến:
+
+1. **Cache path** → dùng `getExternalFilesDir` (không cần quyền storage)
+2. **User-Agent** → set chuỗi hợp lệ, tránh bị OSM block
+3. **Network Security Config** → cho phép tile HTTPS/HTTP
+4. **Hardware acceleration** → bật cho Activity
+5. **Tiles scaled to DPI** → hiển thị rõ trên màn hình cao DPI
+6. **osmdroid 6.1.20** → tương thích tốt hơn Android 12/13/14
+
+### Checklist khi cài trên máy thật:
+- Cấp quyền **Vị trí** (Location) khi app hỏi
+- Bật **GPS / Vị trí** trong cài đặt máy
+- Có **Internet** (Wi-Fi hoặc 4G)
+- Nếu map vẫn xám: xóa data app → mở lại (xóa cache tile cũ)
+
+### Build lại APK
+```bash
+./gradlew clean assembleDebug
+```
