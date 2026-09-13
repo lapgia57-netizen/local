@@ -26,26 +26,21 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Build Debug APK
         run: |
-          # Kiểm tra nếu thiếu file gradle-wrapper.jar thì tự động tạo lại wrapper bằng Gradle hệ thống
+          # 1. Tự động sửa lỗi nếu mã nguồn của bạn bị thiếu file gradle-wrapper.jar
           if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Gradle wrapper jar missing. Generating standard wrapper..."
+            echo "⚠️ Gradle wrapper jar missing. Generating standard wrapper..."
             gradle wrapper
           fi
 
-          # Tiến hành cấp quyền và chạy build bằng Gradle Wrapper
-          if [ -f "./gradlew" ]; then
-            echo "Building with Gradle Wrapper..."
-            chmod +x gradlew
-            ./gradlew assembleDebug --stacktrace
-          else
-            echo "Gradlew not found. Falling back to global Gradle..."
-            gradle assembleDebug --stacktrace
-          fi
+          # 2. Cấp quyền thực thi và tối ưu bộ nhớ build (giảm thiểu crash do OOM)
+          chmod +x gradlew
+          export GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m"
+
+          # 3. Tiến hành biên dịch dự án
+          echo "🚀 Starting build with Gradle Wrapper..."
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
