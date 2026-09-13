@@ -1,13 +1,14 @@
 {
   "project_info": {
     "project_number": "334612619008",
+    "firebase_url": "https://ptptt-pcpc-default-rtdb.firebaseio.com",
     "project_id": "ptptt-pcpc",
     "storage_bucket": "ptptt-pcpc.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:334612619008:android:REPLACE_WITH_YOUR_ANDROID_APP_ID",
+        "mobilesdk_app_id": "1:334612619008:android:c9ab58082640f9ae335de5",
         "android_client_info": {
           "package_name": "com.example.locationmap"
         }

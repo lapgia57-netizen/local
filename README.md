@@ -113,3 +113,33 @@ app/src/main/java/com/example/locationmap/
 ```
 
 Chúc bạn code vui vẻ!
+
+## Sửa lỗi build thường gặp
+
+### 1. Missing dependencies (đã fix)
+Đã thêm:
+- `androidx.coordinatorlayout:coordinatorlayout`
+- `androidx.recyclerview:recyclerview`
+- `androidx.preference:preference-ktx`
+
+### 2. Deprecated PreferenceManager
+Đã đổi sang `androidx.preference.PreferenceManager`
+
+### 3. google-services.json
+**Bắt buộc** thay file `app/google-services.json` bằng file thật tải từ Firebase Console (thêm Android app với package `com.example.locationmap`).
+
+Nếu không thay, build có thể báo lỗi "No matching client found for package name".
+
+### 4. Gradle Wrapper
+Đã thêm đầy đủ `gradlew` + `gradle-wrapper.jar`. Chạy:
+
+```bash
+chmod +x gradlew
+./gradlew assembleDebug
+```
+
+### 5. Lỗi permissions / location trên máy ảo
+Dùng máy thật hoặc emulator có Google Play + bật Location.
+
+### 6. Firebase Rules
+Nhớ cập nhật rules cho node `locations` như hướng dẫn ở trên, nếu không sẽ không lưu được dữ liệu.
